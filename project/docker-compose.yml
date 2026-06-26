@@ -5,8 +5,8 @@ services:
       - "9000:9000"   # S3 API
       - "9001:9001"   # web console
     volumes:
-      - ./rustfs-data:/data   # host dir must be owned by UID 10001 (RustFS runs as non-root)
-      - ./rustfs-logs:/logs
+      - rustfs-data:/data   # host dir must be owned by UID 10001 (RustFS runs as non-root)
+      - rustfs-logs:/logs
     # Default credentials are rustfsadmin / rustfsadmin. Change them for anything real,
     # and confirm the credential env-var names against the RustFS docs for your image tag.
 
@@ -23,3 +23,7 @@ services:
       S3_ENDPOINT: "http://rustfs:9000"
       HF_TOKEN: ${HF_TOKEN:-}
     command: sleep infinity   # exec in and run: pip install duckdb datasets huggingface_hub boto3
+
+volumes:
+  rustfs-data:
+  rusfs-logs:
