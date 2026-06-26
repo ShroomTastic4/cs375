@@ -1,0 +1,25 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - ./rustfs-data:/data   # host dir must be owned by UID 10001 (RustFS runs as non-root)
+      - ./rustfs-logs:/logs
+    # Default credentials are rustfsadmin / rustfsadmin. Change them for anything real,
+    # and confirm the credential env-var names against the RustFS docs for your image tag.
+
+  lab:
+    image: python:3.12-slim
+    working_dir: /workspace
+    depends_on: [rustfs]
+    volumes:
+      - ./:/workspace
+      - ./local-store:/data/local   # the "local storage" half of objective 4
+    environment:
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
+      S3_ENDPOINT: "http://rustfs:9000"
+      HF_TOKEN: ${HF_TOKEN:-}
+    command: sleep infinity   # exec in and run: pip install duckdb datasets huggingface_hub boto3
