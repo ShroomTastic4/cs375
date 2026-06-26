@@ -26,4 +26,4 @@ services:
 
 volumes:
   rustfs-data:
-  rusfs-logs:
+  rustfs-logs:
