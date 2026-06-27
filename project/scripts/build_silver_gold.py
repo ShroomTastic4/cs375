@@ -51,21 +51,21 @@ def demo_coco_crowded_scenes(con):
 
 
 def demo_visdrone_selective_read(con):
-    print("\n=== VisDrone fragment query: select keyframes only by per-fragment stats ===")
-    selected = con.sql("""
-        SELECT video_id, fragment_index, uri, byte_size
-        FROM gold.visdrone_training
-        WHERE is_keyframe
-        ORDER BY video_id
-    """).fetchall()
-    print(con.sql("""
-        SELECT video_id, fragment_index, uri, byte_size
-        FROM gold.visdrone_training
-        WHERE is_keyframe
-        ORDER BY video_id
-    """))
+    print("\n=== VisDrone fragment query: busy fragments by real per-frame detection counts ===")
+    threshold = con.sql("SELECT quantile_cont(n_objects, 0.75) FROM gold.visdrone_training").fetchone()[0]
+    print(f"(threshold = 75th percentile of n_objects across all fragments = {threshold})\n")
 
-    selected_video_ids = [row[0] for row in selected]
+    query = f"""
+        SELECT video_id, fragment_index, uri, byte_size, n_objects, classes
+        FROM gold.visdrone_training
+        WHERE n_objects > {threshold}
+        ORDER BY n_objects DESC
+        LIMIT 100
+    """
+    selected = con.sql(query).fetchall()
+    print(con.sql(query))
+
+    selected_video_ids = sorted({row[0] for row in selected})
     totals = con.sql(f"""
         SELECT video_id, count(*) AS frame_count, sum(byte_size) AS total_bytes
         FROM gold.visdrone_training
@@ -75,7 +75,7 @@ def demo_visdrone_selective_read(con):
     total_bytes_by_video = {row[0]: (row[1], row[2]) for row in totals}
 
     fetched_bytes = 0
-    for video_id, fragment_index, uri, byte_size in selected:
+    for video_id, fragment_index, uri, byte_size, n_objects, classes in selected:
         bucket, key = uri_to_bucket_key(uri)
         body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         assert len(body) == byte_size
@@ -86,7 +86,7 @@ def demo_visdrone_selective_read(con):
         clip_frame_count += frame_count
         clip_total_bytes += total
 
-    print(f"\nFetched {len(selected)} keyframe object(s), {fetched_bytes} bytes total.")
+    print(f"\nFetched {len(selected)} busy-fragment object(s), {fetched_bytes} bytes total.")
     print(f"Those same {len(selected_video_ids)} video(s) have {clip_frame_count} frames "
           f"totaling {clip_total_bytes} bytes.")
     print(f"-> read {fetched_bytes / clip_total_bytes:.1%} of the clip bytes: "

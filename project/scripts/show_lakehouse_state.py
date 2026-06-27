@@ -22,8 +22,10 @@ TABLES = [
     "raw.coco_annotations",
     "raw.coco_categories",
     "raw.visdrone_fragments",
+    "raw.visdrone_detections",
     "silver.coco_annotations",
     "silver.visdrone_fragments",
+    "silver.visdrone_detections",
     "gold.coco_labels",
     "gold.visdrone_training",
 ]
@@ -43,7 +45,13 @@ def show_tables(con):
         print(f"  {table:<32} {count:>5} rows")
 
     print("\n=== Sample rows (with URIs) ===")
-    for table in ("raw.coco_annotations", "raw.visdrone_fragments", "gold.coco_labels", "gold.visdrone_training"):
+    for table in (
+        "raw.coco_annotations",
+        "raw.visdrone_fragments",
+        "raw.visdrone_detections",
+        "gold.coco_labels",
+        "gold.visdrone_training",
+    ):
         print(f"\n-- {table} --")
         print(con.sql(f"SELECT * FROM {table} LIMIT 3"))
 

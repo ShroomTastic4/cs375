@@ -31,6 +31,10 @@ COCO_ANNOTATIONS_CACHE = LOCAL_STORE / "coco_annotations_src" / "instances_train
 VISDRONE_REPO = "Voxel51/visdrone-mot"
 VISDRONE_SEQUENCE_COUNT = 3
 VISDRONE_FRAMES_PER_SEQUENCE = 7
+VISDRONE_SAMPLES_CACHE = LOCAL_STORE / "visdrone_samples_src" / "samples.json"
+# The dataset's own FiftyOne metadata.json sets dynamic_groups_target_frame_rate=30;
+# there's no per-sequence timestamp in samples.json, so this is used to derive start/end times.
+VISDRONE_FPS = 30
 
 HF_HEADERS = {"Authorization": f"Bearer {os.environ['HF_TOKEN']}"} if os.environ.get("HF_TOKEN") else {}
 
@@ -142,7 +146,8 @@ def ingest_coco():
 
 
 # ---------------------------------------------------------------------------
-# VisDrone: sample frame sequences -> raw blobs, fragment index -> raw.visdrone_fragments
+# VisDrone: sample frame sequences -> raw blobs, fragment index + per-frame
+# detections -> raw.visdrone_fragments / raw.visdrone_detections
 # ---------------------------------------------------------------------------
 
 def _frame_order(filename):
@@ -162,28 +167,75 @@ def sample_visdrone_sequences(n):
     return {seq: sorted(sequences[seq], key=_frame_order) for seq in chosen}
 
 
+def fetch_visdrone_samples():
+    """Real per-frame detections (label, bbox, confidence, occlusion) from the
+    dataset's own FiftyOne export - keyed by filepath, e.g. 'data/0000001.jpg'."""
+    if VISDRONE_SAMPLES_CACHE.exists():
+        print(f"  Using cached samples.json at {VISDRONE_SAMPLES_CACHE}")
+        samples = json.loads(VISDRONE_SAMPLES_CACHE.read_text())["samples"]
+    else:
+        print("  Downloading VisDrone-MOT samples.json (~60MB, cached after first run)...")
+        r = requests.get(hf_resolve_url(VISDRONE_REPO, "samples.json"), headers=HF_HEADERS, timeout=120)
+        r.raise_for_status()
+        VISDRONE_SAMPLES_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        VISDRONE_SAMPLES_CACHE.write_bytes(r.content)
+        samples = json.loads(r.content)["samples"]
+    return {s["filepath"]: s for s in samples}
+
+
 def ingest_visdrone():
     print(f"[VisDrone] sampling {VISDRONE_SEQUENCE_COUNT} sequences from {VISDRONE_REPO}")
     sequences = sample_visdrone_sequences(VISDRONE_SEQUENCE_COUNT)
+    samples_by_filepath = fetch_visdrone_samples()
 
-    rows = []
+    fragment_rows = []
+    detection_rows = []
     for seq_id, frames in sequences.items():
         for idx, fname in enumerate(frames, start=1):
             data = requests.get(hf_resolve_url(VISDRONE_REPO, f"data/{fname}"), headers=HF_HEADERS, timeout=30).content
             uri = put_blob(f"raw/visdrone/{seq_id}/{fname}", data, "image/jpeg")
-            rows.append({
+
+            sample = samples_by_filepath.get(f"data/{fname}", {})
+            detections = sample.get("detections", [])
+            frame_number = sample.get("frame_number")
+
+            fragment_rows.append({
                 "video_id": seq_id,
                 "fragment_index": idx,
                 "fragment_count": len(frames),
                 "filename": fname,
                 "uri": uri,
                 "byte_size": len(data),
+                "scene_id": sample.get("scene_id"),
+                "frame_number": frame_number,
+                "start_frame": frame_number,
+                "end_frame": frame_number,
+                "start_time": frame_number / VISDRONE_FPS if frame_number is not None else None,
+                "end_time": frame_number / VISDRONE_FPS if frame_number is not None else None,
+                "n_objects": len(detections),
+                "classes": sorted({d["label"] for d in detections}),
             })
 
-    print(f"  uploaded {len(rows)} frame blobs across {len(sequences)} sequences to s3://{BUCKET}/raw/visdrone/")
+            for d in detections:
+                detection_rows.append({
+                    "video_id": seq_id,
+                    "fragment_index": idx,
+                    "uri": uri,
+                    "label": d["label"],
+                    "bbox": d["bounding_box"],
+                    "confidence": d.get("confidence"),
+                    "visibility": d.get("visibility"),
+                    "occlusion": d.get("occlusion"),
+                })
+
+    print(f"  uploaded {len(fragment_rows)} frame blobs across {len(sequences)} sequences to s3://{BUCKET}/raw/visdrone/")
     out = LOCAL_STORE / "visdrone_fragments.parquet"
-    pd.DataFrame(rows).to_parquet(out)
-    print(f"  wrote {len(rows)} fragment-index rows to {out}")
+    pd.DataFrame(fragment_rows).to_parquet(out)
+    print(f"  wrote {len(fragment_rows)} fragment-index rows to {out}")
+
+    detections_out = LOCAL_STORE / "visdrone_detections.parquet"
+    pd.DataFrame(detection_rows).to_parquet(detections_out)
+    print(f"  wrote {len(detection_rows)} per-frame detection rows to {detections_out}")
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +257,10 @@ def checkpoint(con):
     print(con.sql("SELECT DISTINCT image_id, file_name, uri FROM raw.coco_annotations LIMIT 5"))
 
     print("\nraw.visdrone_fragments sample URIs:")
-    print(con.sql("SELECT video_id, fragment_index, uri FROM raw.visdrone_fragments LIMIT 5"))
+    print(con.sql("SELECT video_id, fragment_index, uri, n_objects, classes FROM raw.visdrone_fragments LIMIT 5"))
+
+    print("\nraw.visdrone_detections sample rows:")
+    print(con.sql("SELECT video_id, fragment_index, label, bbox FROM raw.visdrone_detections LIMIT 5"))
 
 
 def main():

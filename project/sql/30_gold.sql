@@ -17,8 +17,9 @@ FROM silver.coco_annotations a
 LEFT JOIN raw.coco_categories c ON c.category_id = a.category_id
 GROUP BY a.image_id, a.uri, a.file_name, a.width, a.height;
 
--- One row per video fragment (frame): per-fragment stats for selective reads,
--- plus a per-video (not per-frame) train/val split so a clip never straddles both.
+-- One row per video fragment (frame): real per-fragment detection stats for
+-- the busy-fragments query, plus a per-video (not per-frame) train/val split
+-- so a clip never straddles both.
 CREATE OR REPLACE TABLE gold.visdrone_training AS
 SELECT
     video_id,
@@ -26,6 +27,13 @@ SELECT
     fragment_count,
     uri,
     byte_size,
+    scene_id,
+    start_frame,
+    end_frame,
+    start_time,
+    end_time,
+    n_objects,
+    classes,
     is_keyframe,
     fragment_index / fragment_count::DOUBLE AS relative_position,
     CASE WHEN hash(video_id) % 5 = 0 THEN 'val' ELSE 'train' END AS split

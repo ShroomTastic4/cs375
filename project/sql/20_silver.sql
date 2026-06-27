@@ -36,8 +36,34 @@ SELECT * EXCLUDE (rn) FROM (
         filename,
         uri,
         COALESCE(byte_size, 0) AS byte_size,
+        scene_id,
+        CAST(start_frame AS INTEGER) AS start_frame,
+        CAST(end_frame AS INTEGER) AS end_frame,
+        start_time,
+        end_time,
+        COALESCE(n_objects, 0) AS n_objects,         -- real per-frame detection count
+        COALESCE(classes, []) AS classes,            -- distinct detected labels in this frame
         (fragment_index = 1) AS is_keyframe,
         ROW_NUMBER() OVER (PARTITION BY video_id, fragment_index ORDER BY filename) AS rn
     FROM raw.visdrone_fragments
+)
+WHERE rn = 1;
+
+CREATE OR REPLACE TABLE silver.visdrone_detections AS
+SELECT * EXCLUDE (rn) FROM (
+    SELECT
+        video_id,
+        CAST(fragment_index AS INTEGER) AS fragment_index,
+        uri,
+        label,
+        bbox,
+        COALESCE(confidence, 1.0) AS confidence,
+        COALESCE(visibility, 1) AS visibility,
+        COALESCE(occlusion, 0) AS occlusion,
+        ROW_NUMBER() OVER (
+            PARTITION BY video_id, fragment_index, label, bbox
+            ORDER BY video_id
+        ) AS rn
+    FROM raw.visdrone_detections
 )
 WHERE rn = 1;

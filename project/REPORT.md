@@ -128,15 +128,20 @@ is built for exactly that GET.
 So the actual image/video bytes are uploaded as plain S3 objects under their own prefixes
 (`raw/coco/images/<file>.jpg`, `raw/visdrone/<video_id>/<frame>.jpg`) completely outside any
 DuckLake table. The tables hold only a `uri` column pointing at that object plus structured
-metadata about it - dimensions, bounding boxes, `byte_size`, `fragment_index`, `is_keyframe`. The
-catalog is the index; RustFS is the blob store.
+metadata about it - dimensions and bounding boxes for COCO; for VisDrone, a separate
+`raw.visdrone_detections` table holds one row per detected object (`label`, `bbox`, `confidence`,
+`occlusion`) sourced from the dataset's own per-frame annotations, which we aggregate into
+`n_objects` and `classes` on the fragment index itself (`byte_size`, `start_frame`/`end_frame`,
+`start_time`/`end_time`, `n_objects`, `classes`). The catalog is the index; RustFS is the blob
+store.
 
 The VisDrone fragment index makes "give me the busy fragments" cheap: each row is one frame with
-its own stats (`byte_size`, `is_keyframe`, `relative_position`). A predicate like
-`WHERE is_keyframe` or `WHERE byte_size > threshold` only has to scan the tiny fragment-index
-Parquet file (kilobytes) - it never touches a single frame image. Only after that query returns a
-short list of `uri`s do we issue targeted `s3.get_object` calls for exactly those keys. We
-measured it directly in `build_silver_gold.py`: selecting the 3 keyframes and fetching only those
-objects pulled 498KB, while the same 3 videos hold 21 frames totaling 9MB - **5.5%** of the clip
-bytes were ever read, because "which fragments matter" was answered entirely against cheap
-metadata before any expensive byte was touched.
+its own real detection-derived stats. A predicate like `WHERE n_objects > threshold` only has to
+scan the tiny fragment-index Parquet file (kilobytes) - it never touches a single frame image.
+Only after that query returns a short list of `uri`s do we issue targeted `s3.get_object` calls
+for exactly those keys. We measured it directly in `build_silver_gold.py`: filtering for fragments
+above the 75th-percentile object count (threshold 52, the busiest frame had 110 detected objects -
+pedestrians, cars, vans, motorbikes, bicycles) and fetching only those 4 busy frames pulled 1.9MB,
+while the same 4 videos hold 28 frames totaling 12.1MB - **15.8%** of the clip bytes were ever
+read, because "which fragments matter" was answered entirely against cheap metadata (real per-frame
+detection counts, not a file-size proxy) before any expensive byte was touched.

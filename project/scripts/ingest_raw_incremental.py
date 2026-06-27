@@ -20,10 +20,12 @@ from ingest_raw import (
     HF_HEADERS,
     LOCAL_STORE,
     SQL_DIR,
+    VISDRONE_FPS,
     VISDRONE_FRAMES_PER_SEQUENCE,
     VISDRONE_REPO,
     _frame_order,
     fetch_coco_annotations,
+    fetch_visdrone_samples,
     hf_dataset_files,
     hf_resolve_url,
     put_blob,
@@ -108,27 +110,60 @@ def ingest_visdrone_increment(con):
         print("  no new VisDrone sequences available")
         return
 
-    rows = []
+    samples_by_filepath = fetch_visdrone_samples()
+
+    fragment_rows = []
+    detection_rows = []
     for seq_id, frames in chosen.items():
         for idx, fname in enumerate(frames, start=1):
             data = requests.get(hf_resolve_url(VISDRONE_REPO, f"data/{fname}"), headers=HF_HEADERS, timeout=30).content
             uri = put_blob(f"raw/visdrone/{seq_id}/{fname}", data, "image/jpeg")
-            rows.append({
+
+            sample = samples_by_filepath.get(f"data/{fname}", {})
+            detections = sample.get("detections", [])
+            frame_number = sample.get("frame_number")
+
+            fragment_rows.append({
                 "video_id": seq_id,
                 "fragment_index": idx,
                 "fragment_count": len(frames),
                 "filename": fname,
                 "uri": uri,
                 "byte_size": len(data),
+                "scene_id": sample.get("scene_id"),
+                "frame_number": frame_number,
+                "start_frame": frame_number,
+                "end_frame": frame_number,
+                "start_time": frame_number / VISDRONE_FPS if frame_number is not None else None,
+                "end_time": frame_number / VISDRONE_FPS if frame_number is not None else None,
+                "n_objects": len(detections),
+                "classes": sorted({d["label"] for d in detections}),
             })
 
-    print(f"  uploaded {len(rows)} new frame blobs across {len(chosen)} sequence(s)")
-    staged = LOCAL_STORE / "visdrone_fragments_increment.parquet"
-    pd.DataFrame(rows).to_parquet(staged)
-    print(f"  staged {len(rows)} new fragment rows at {staged} (local-storage staging area)")
+            for d in detections:
+                detection_rows.append({
+                    "video_id": seq_id,
+                    "fragment_index": idx,
+                    "uri": uri,
+                    "label": d["label"],
+                    "bbox": d["bounding_box"],
+                    "confidence": d.get("confidence"),
+                    "visibility": d.get("visibility"),
+                    "occlusion": d.get("occlusion"),
+                })
 
+    print(f"  uploaded {len(fragment_rows)} new frame blobs across {len(chosen)} sequence(s)")
+    staged = LOCAL_STORE / "visdrone_fragments_increment.parquet"
+    pd.DataFrame(fragment_rows).to_parquet(staged)
+    print(f"  staged {len(fragment_rows)} new fragment rows at {staged} (local-storage staging area)")
     con.execute(f"INSERT INTO raw.visdrone_fragments SELECT * FROM read_parquet('{staged}')")
     print("  inserted into raw.visdrone_fragments -> lakehouse")
+
+    detections_staged = LOCAL_STORE / "visdrone_detections_increment.parquet"
+    pd.DataFrame(detection_rows).to_parquet(detections_staged)
+    print(f"  staged {len(detection_rows)} new detection rows at {detections_staged}")
+    con.execute(f"INSERT INTO raw.visdrone_detections SELECT * FROM read_parquet('{detections_staged}')")
+    print("  inserted into raw.visdrone_detections -> lakehouse")
 
 
 def main():
