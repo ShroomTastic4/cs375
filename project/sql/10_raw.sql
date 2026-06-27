@@ -6,3 +6,6 @@ SELECT * FROM read_parquet('/data/local/coco_annotations.parquet');
 
 CREATE OR REPLACE TABLE raw.visdrone_fragments AS
 SELECT * FROM read_parquet('/data/local/visdrone_fragments.parquet');
+
+CREATE OR REPLACE TABLE raw.coco_categories AS
+SELECT * FROM read_parquet('/data/local/coco_categories.parquet');

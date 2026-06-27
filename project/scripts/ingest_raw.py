@@ -129,12 +129,16 @@ def ingest_coco():
                 "category_id": a["category_id"],
                 "bbox": a["bbox"],
                 "area": a["area"],
-                "iscrowd": bool(a["iscrowd"]),
+                "iscrowd": a["iscrowd"],  # native 0/1 from the source - silver casts this to BOOLEAN
             })
 
     out = LOCAL_STORE / "coco_annotations.parquet"
     pd.DataFrame(rows).to_parquet(out)
     print(f"  wrote {len(rows)} annotation rows to {out}")
+
+    categories_out = LOCAL_STORE / "coco_categories.parquet"
+    pd.DataFrame(coco["categories"]).rename(columns={"id": "category_id"}).to_parquet(categories_out)
+    print(f"  wrote {len(coco['categories'])} category rows to {categories_out}")
 
 
 # ---------------------------------------------------------------------------
